@@ -16,6 +16,7 @@
 package okhttp3.mockwebserver;
 
 import java.io.BufferedReader;
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -281,6 +282,9 @@ public final class MockWebServerTest {
 
   @Test public void disconnectRequestHalfway() throws IOException {
     server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_DURING_REQUEST_BODY));
+    // Limit the size of the request body that the server holds in memory to an arbitrary
+    // 3.5 MBytes so this test can pass on devices with little memory.
+    server.setBodyLimit(7 * 512 * 1024);
 
     HttpURLConnection connection = (HttpURLConnection) server.url("/").url().openConnection();
     connection.setRequestMethod("POST");
@@ -334,6 +338,11 @@ public final class MockWebServerTest {
   @Test public void shutdownWithoutStart() throws IOException {
     MockWebServer server = new MockWebServer();
     server.shutdown();
+  }
+
+  @Test public void closeViaClosable() throws IOException {
+    Closeable server = new MockWebServer();
+    server.close();
   }
 
   @Test public void shutdownWithoutEnqueue() throws IOException {

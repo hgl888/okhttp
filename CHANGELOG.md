@@ -1,6 +1,139 @@
 Change Log
 ==========
 
+## Version 3.4.1
+
+_2016-07-10_
+
+ *  **Fix a major bug in encoding HTTP headers.** In 3.4.0 and 3.4.0-RC1 OkHttp
+    had an off-by-one bug in our HPACK encoder. This bug could have caused the
+    wrong headers to be emitted after a sequence of HTTP/2 requests! Everyone
+    who is using OkHttp 3.4.0 or 3.4.0-RC1 should upgrade for this bug fix.
+
+
+## Version 3.4.0
+
+_2016-07-08_
+
+ *  New: Support dynamic table size changes to HPACK Encoder.
+ *  Fix: Use `TreeMap` in `Headers.toMultimap()`. This makes string lookups on
+    the returned map case-insensitive.
+ *  Fix: Don't share the OkHttpClient's `Dispatcher` in `HttpURLConnection`.
+
+
+## Version 3.4.0-RC1
+
+_2016-07-02_
+
+ *  **We’ve rewritten HttpURLConnection and HttpsURLConnection.** Previously we
+    shared a single HTTP engine between two frontend APIs: `HttpURLConnection`
+    and `Call`. With this release we’ve rearranged things so that the
+    `HttpURLConnection` frontend now delegates to the `Call` APIs internally.
+    This has enabled substantial simplifications and optimizations in the OkHttp
+    core for both frontends.
+
+    For most HTTP requests the consequences of this change will be negligible.
+    If your application uses `HttpURLConnection.connect()`,
+    `setFixedLengthStreamingMode()`, or `setChunkedStreamingMode()`, OkHttp will
+    now use a async dispatcher thread to establish the HTTP connection.
+
+    We don’t expect this change to have any behavior or performance
+    consequences. Regardless, please exercise your `OkUrlFactory` and
+    `HttpURLConnection` code when applying this update.
+
+ *  **Cipher suites may now have arbitrary names.** Previously `CipherSuite` was
+    a Java enum and it was impossible to define new cipher suites without first
+    upgrading OkHttp. With this change it is now a regular Java class with
+    enum-like constants. Application code that uses enum methods on cipher
+    suites (`ordinal()`, `name()`, etc.) will break with this change.
+
+ *  Fix: `CertificatePinner` now matches canonicalized hostnames. Previously
+    this was case sensitive. This change should also make it easier to configure
+    certificate pinning for internationalized domain names.
+ *  Fix: Don’t crash on non-ASCII `ETag` headers. Previously OkHttp would reject
+    these headers when validating a cached response.
+ *  Fix: Don’t allow remote peer to arbitrarily size the HPACK decoder dynamic
+    table.
+ *  Fix: Honor per-host configuration in Android’s network security config.
+    Previously disabling cleartext for any host would disable cleartext for all
+    hosts. Note that this setting is only available on Android 24+.
+ *  New: HPACK compression is now dynamic. This should improve performance when
+    transmitting request headers over HTTP/2.
+ *  New: `Dispatcher.setIdleCallback()` can be used to signal when there are no
+    calls in flight. This is useful for [testing with
+    Espresso][okhttp_idling_resource].
+ *  New: Upgrade to Okio 1.9.0.
+
+     ```xml
+     <dependency>
+       <groupId>com.squareup.okio</groupId>
+       <artifactId>okio</artifactId>
+       <version>1.9.0</version>
+     </dependency>
+     ```
+
+
+## Version 3.3.1
+
+_2016-05-28_
+
+ *  Fix: The plaintext check in HttpLoggingInterceptor incorrectly classified
+    newline characters as control characters. This is fixed.
+ *  Fix: Don't crash reading non-ASCII characters in HTTP/2 headers or in cached
+    HTTP headers.
+ *  Fix: Retain the response body when an attempt to open a web socket returns a
+    non-101 response code.
+
+
+## Version 3.3.0
+
+_2016-05-24_
+
+ *  New: `Response.sentRequestAtMillis()` and `receivedResponseAtMillis()`
+    methods track the system's local time when network calls are made. These
+    replace the `OkHttp-Sent-Millis` and `OkHttp-Received-Millis` headers that were
+    present in earlier versions of OkHttp.
+ *  New: Accept user-provided trust managers in `OkHttpClient.Builder`. This
+    allows OkHttp to satisfy its TLS requirements directly. Otherwise OkHttp
+    will use reflection to extract the `TrustManager` from the
+    `SSLSocketFactory`.
+ *  New: Support prerelease Java 9. This gets ALPN from the platform rather than
+    relying on the alpn-boot bootclasspath override.
+ *  New: `HttpLoggingInterceptor` now logs connection failures.
+ *  New: Upgrade to Okio 1.8.0.
+
+     ```xml
+     <dependency>
+       <groupId>com.squareup.okio</groupId>
+       <artifactId>okio</artifactId>
+       <version>1.8.0</version>
+     </dependency>
+     ```
+
+ *  Fix: Gracefully recover from a failure to rebuild the cache journal.
+ *  Fix: Don't corrupt cache entries when a cache entry is evicted while it is
+    being updated.
+ *  Fix: Make logging more consistent throughout OkHttp.
+ *  Fix: Log plaintext bodies only. This uses simple heuristics to differentiate
+    text from other data.
+ *  Fix: Recover from `REFUSED_STREAM` errors in HTTP/2. This should improve
+    interoperability with Nginx 1.10.0, which [refuses][nginx_959] streams
+    created before HTTP/2 settings have been acknowledged.
+ *  Fix: Improve recovery from failed routes.
+ *  Fix: Accommodate tunneling proxies that close the connection after an auth
+    challenge.
+ *  Fix: Use the proxy authenticator when authenticating HTTP proxies. This
+    regression was introduced in OkHttp 3.0.
+ *  Fix: Fail fast if network interceptors transform the response body such that
+    closing it doesn't also close the underlying stream. We had a bug where
+    OkHttp would attempt to reuse a connection but couldn't because it was still
+    held by a prior request.
+ *  Fix: Ensure network interceptors always have access to the underlying
+    connection.
+ *  Fix: Use `X509TrustManagerExtensions` on Android 17+.
+ *  Fix: Unblock waiting dispatchers on MockWebServer shutdown.
+
+
 ## Version 3.2.0
 
 _2016-02-25_
@@ -1002,3 +1135,5 @@ Initial release.
  [brick]: https://noncombatant.org/2015/05/01/about-http-public-key-pinning/
  [webdav]: https://tools.ietf.org/html/rfc4918
  [major_versions]: http://jakewharton.com/java-interoperability-policy-for-major-version-updates/
+ [nginx_959]: https://trac.nginx.org/nginx/ticket/959
+ [okhttp_idling_resource]: https://github.com/JakeWharton/okhttp-idling-resource

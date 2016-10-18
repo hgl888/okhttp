@@ -37,12 +37,12 @@ import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.HostnameVerifier;
-import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSession;
 import okhttp3.internal.Internal;
-import okhttp3.internal.SslContextBuilder;
 import okhttp3.internal.Util;
 import okhttp3.internal.io.InMemoryFileSystem;
+import okhttp3.internal.platform.Platform;
+import okhttp3.internal.tls.SslClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -56,6 +56,7 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 
+import static okhttp3.TestUtil.defaultClient;
 import static okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_END;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -75,7 +76,7 @@ public final class CacheTest {
   @Rule public MockWebServer server2 = new MockWebServer();
   @Rule public InMemoryFileSystem fileSystem = new InMemoryFileSystem();
 
-  private final SSLContext sslContext = SslContextBuilder.localhost();
+  private final SslClient sslClient = SslClient.localhost();
   private OkHttpClient client;
   private Cache cache;
   private final CookieManager cookieManager = new CookieManager();
@@ -83,7 +84,7 @@ public final class CacheTest {
   @Before public void setUp() throws Exception {
     server.setProtocolNegotiationEnabled(false);
     cache = new Cache(new File("/cache/"), Integer.MAX_VALUE, fileSystem);
-    client = new OkHttpClient.Builder()
+    client = defaultClient().newBuilder()
         .cache(cache)
         .cookieJar(new JavaNetCookieJar(cookieManager))
         .build();
@@ -256,14 +257,14 @@ public final class CacheTest {
   }
 
   @Test public void secureResponseCaching() throws IOException {
-    server.useHttps(sslContext.getSocketFactory(), false);
+    server.useHttps(sslClient.socketFactory, false);
     server.enqueue(new MockResponse()
         .addHeader("Last-Modified: " + formatDate(-1, TimeUnit.HOURS))
         .addHeader("Expires: " + formatDate(1, TimeUnit.HOURS))
         .setBody("ABC"));
 
     client = client.newBuilder()
-        .sslSocketFactory(sslContext.getSocketFactory())
+        .sslSocketFactory(sslClient.socketFactory, sslClient.trustManager)
         .hostnameVerifier(NULL_HOSTNAME_VERIFIER)
         .build();
 
@@ -352,7 +353,7 @@ public final class CacheTest {
   }
 
   @Test public void secureResponseCachingAndRedirects() throws IOException {
-    server.useHttps(sslContext.getSocketFactory(), false);
+    server.useHttps(sslClient.socketFactory, false);
     server.enqueue(new MockResponse()
         .addHeader("Last-Modified: " + formatDate(-1, TimeUnit.HOURS))
         .addHeader("Expires: " + formatDate(1, TimeUnit.HOURS))
@@ -366,7 +367,7 @@ public final class CacheTest {
         .setBody("DEF"));
 
     client = client.newBuilder()
-        .sslSocketFactory(sslContext.getSocketFactory())
+        .sslSocketFactory(sslClient.socketFactory, sslClient.trustManager)
         .hostnameVerifier(NULL_HOSTNAME_VERIFIER)
         .build();
 
@@ -392,7 +393,7 @@ public final class CacheTest {
    * https://github.com/square/okhttp/issues/214
    */
   @Test public void secureResponseCachingAndProtocolRedirects() throws IOException {
-    server2.useHttps(sslContext.getSocketFactory(), false);
+    server2.useHttps(sslClient.socketFactory, false);
     server2.enqueue(new MockResponse()
         .addHeader("Last-Modified: " + formatDate(-1, TimeUnit.HOURS))
         .addHeader("Expires: " + formatDate(1, TimeUnit.HOURS))
@@ -407,7 +408,7 @@ public final class CacheTest {
         .addHeader("Location: " + server2.url("/")));
 
     client = client.newBuilder()
-        .sslSocketFactory(sslContext.getSocketFactory())
+        .sslSocketFactory(sslClient.socketFactory, sslClient.trustManager)
         .hostnameVerifier(NULL_HOSTNAME_VERIFIER)
         .build();
 
@@ -1031,6 +1032,10 @@ public final class CacheTest {
   }
 
   @Test public void conditionalCacheHitIsNotDoublePooled() throws Exception {
+    // Ensure that the (shared) connection pool is in a consistent state.
+    client.connectionPool().evictAll();
+    assertEquals(0, client.connectionPool().idleConnectionCount());
+
     server.enqueue(new MockResponse()
         .addHeader("ETag: v1")
         .setBody("A"));
@@ -1681,7 +1686,7 @@ public final class CacheTest {
   }
 
   @Test public void varyAndHttps() throws Exception {
-    server.useHttps(sslContext.getSocketFactory(), false);
+    server.useHttps(sslClient.socketFactory, false);
     server.enqueue(new MockResponse()
         .addHeader("Cache-Control: max-age=60")
         .addHeader("Vary: Accept-Language")
@@ -1690,7 +1695,7 @@ public final class CacheTest {
         .setBody("B"));
 
     client = client.newBuilder()
-        .sslSocketFactory(sslContext.getSocketFactory())
+        .sslSocketFactory(sslClient.socketFactory, sslClient.trustManager)
         .hostnameVerifier(NULL_HOSTNAME_VERIFIER)
         .build();
 
@@ -1834,21 +1839,29 @@ public final class CacheTest {
     server.enqueue(new MockResponse()
         .setBody("B"));
 
-    // cache miss; seed the cache
+    // A cache miss writes the cache.
+    long t0 = System.currentTimeMillis();
     Response response1 = get(server.url("/a"));
     assertEquals("A", response1.body().string());
     assertEquals(null, response1.header("Allow"));
+    assertEquals(0, response1.receivedResponseAtMillis() - t0, 250.0);
 
-    // conditional cache hit; update the cache
+    // A conditional cache hit updates the cache.
+    Thread.sleep(500); // Make sure t0 and t1 are distinct.
+    long t1 = System.currentTimeMillis();
     Response response2 = get(server.url("/a"));
     assertEquals(HttpURLConnection.HTTP_OK, response2.code());
     assertEquals("A", response2.body().string());
     assertEquals("GET, HEAD", response2.header("Allow"));
+    assertEquals(0, response2.receivedResponseAtMillis() - t1, 250.0);
 
-    // full cache hit
+    // A full cache hit reads the cache.
+    Thread.sleep(500); // Make sure t1 and t2 are distinct.
+    long t2 = System.currentTimeMillis();
     Response response3 = get(server.url("/a"));
     assertEquals("A", response3.body().string());
     assertEquals("GET, HEAD", response3.header("Allow"));
+    assertEquals(0, response3.receivedResponseAtMillis() - t1, 250.0);
 
     assertEquals(2, server.getRequestCount());
   }
@@ -1981,6 +1994,7 @@ public final class CacheTest {
   @Test public void testGoldenCacheHttpsResponseOkHttp27() throws Exception {
     HttpUrl url = server.url("/");
     String urlKey = Util.md5Hex(url.toString());
+    String prefix = Platform.get().getPrefix();
     String entryMetadata = ""
         + "" + url + "\n"
         + "GET\n"
@@ -1988,8 +2002,8 @@ public final class CacheTest {
         + "HTTP/1.1 200 OK\n"
         + "4\n"
         + "Content-Length: 3\n"
-        + "OkHttp-Received-Millis: " + System.currentTimeMillis() + "\n"
-        + "OkHttp-Sent-Millis: " + System.currentTimeMillis() + "\n"
+        + prefix + "-Received-Millis: " + System.currentTimeMillis() + "\n"
+        + prefix + "-Sent-Millis: " + System.currentTimeMillis() + "\n"
         + "Cache-Control: max-age=60\n"
         + "\n"
         + "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256\n"
@@ -2029,6 +2043,7 @@ public final class CacheTest {
   @Test public void testGoldenCacheHttpsResponseOkHttp30() throws Exception {
     HttpUrl url = server.url("/");
     String urlKey = Util.md5Hex(url.toString());
+    String prefix = Platform.get().getPrefix();
     String entryMetadata = ""
         + "" + url + "\n"
         + "GET\n"
@@ -2036,8 +2051,8 @@ public final class CacheTest {
         + "HTTP/1.1 200 OK\n"
         + "4\n"
         + "Content-Length: 3\n"
-        + "OkHttp-Received-Millis: " + System.currentTimeMillis() + "\n"
-        + "OkHttp-Sent-Millis: " + System.currentTimeMillis() + "\n"
+        + prefix + "-Received-Millis: " + System.currentTimeMillis() + "\n"
+        + prefix + "-Sent-Millis: " + System.currentTimeMillis() + "\n"
         + "Cache-Control: max-age=60\n"
         + "\n"
         + "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256\n"
@@ -2077,6 +2092,7 @@ public final class CacheTest {
   @Test public void testGoldenCacheHttpResponseOkHttp30() throws Exception {
     HttpUrl url = server.url("/");
     String urlKey = Util.md5Hex(url.toString());
+    String prefix = Platform.get().getPrefix();
     String entryMetadata = ""
         + "" + url + "\n"
         + "GET\n"
@@ -2085,8 +2101,8 @@ public final class CacheTest {
         + "4\n"
         + "Cache-Control: max-age=60\n"
         + "Content-Length: 3\n"
-        + "OkHttp-Received-Millis: " + System.currentTimeMillis() + "\n"
-        + "OkHttp-Sent-Millis: " + System.currentTimeMillis() + "\n";
+        + prefix + "-Received-Millis: " + System.currentTimeMillis() + "\n"
+        + prefix + "-Sent-Millis: " + System.currentTimeMillis() + "\n";
     String entryBody = "abc";
     String journalBody = ""
         + "libcore.io.DiskLruCache\n"
@@ -2318,6 +2334,50 @@ public final class CacheTest {
     assertEquals("v1", server.takeRequest().getHeader("If-None-Match"));
     assertEquals("v1", server.takeRequest().getHeader("If-None-Match"));
     assertEquals("v2", server.takeRequest().getHeader("If-None-Match"));
+  }
+
+  @Test public void combinedCacheHeadersCanBeNonAscii() throws Exception {
+    server.enqueue(new MockResponse()
+        .addHeader("Last-Modified: " + formatDate(-1, TimeUnit.HOURS))
+        .addHeader("Cache-Control: max-age=0")
+        .addHeaderLenient("Alpha", "α")
+        .addHeaderLenient("β", "Beta")
+        .setBody("abcd"));
+    server.enqueue(new MockResponse()
+        .addHeader("Transfer-Encoding: none")
+        .addHeaderLenient("Gamma", "Γ")
+        .addHeaderLenient("Δ", "Delta")
+        .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
+
+    Response response1 = get(server.url("/"));
+    assertEquals("α", response1.header("Alpha"));
+    assertEquals("Beta", response1.header("β"));
+    assertEquals("abcd", response1.body().string());
+
+    Response response2 = get(server.url("/"));
+    assertEquals("α", response2.header("Alpha"));
+    assertEquals("Beta", response2.header("β"));
+    assertEquals("Γ", response2.header("Gamma"));
+    assertEquals("Delta", response2.header("Δ"));
+    assertEquals("abcd", response2.body().string());
+  }
+
+  @Test public void etagConditionCanBeNonAscii() throws Exception {
+    server.enqueue(new MockResponse()
+        .addHeaderLenient("Etag", "α")
+        .addHeader("Cache-Control: max-age=0")
+        .setBody("abcd"));
+    server.enqueue(new MockResponse()
+        .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
+
+    Response response1 = get(server.url("/"));
+    assertEquals("abcd", response1.body().string());
+
+    Response response2 = get(server.url("/"));
+    assertEquals("abcd", response2.body().string());
+
+    assertEquals(null, server.takeRequest().getHeader("If-None-Match"));
+    assertEquals("α", server.takeRequest().getHeader("If-None-Match"));
   }
 
   private Response get(HttpUrl url) throws IOException {

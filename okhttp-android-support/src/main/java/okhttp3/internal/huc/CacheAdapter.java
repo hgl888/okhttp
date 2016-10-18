@@ -25,9 +25,9 @@ import java.util.List;
 import java.util.Map;
 import okhttp3.Request;
 import okhttp3.Response;
-import okhttp3.internal.InternalCache;
-import okhttp3.internal.http.CacheRequest;
-import okhttp3.internal.http.CacheStrategy;
+import okhttp3.internal.cache.CacheRequest;
+import okhttp3.internal.cache.CacheStrategy;
+import okhttp3.internal.cache.InternalCache;
 import okio.Okio;
 import okio.Sink;
 
@@ -78,7 +78,7 @@ public final class CacheAdapter implements InternalCache {
     // cacheable or the client should be careful about caching it.
   }
 
-  @Override public void update(Response cached, Response network) throws IOException {
+  @Override public void update(Response cached, Response network) {
     // This method is treated as optional and there is no obvious way of implementing it with
     // ResponseCache. Updating headers is useful if the server changes the metadata for a resource
     // (e.g. max age) to extend or truncate the life of that resource in the cache. If the metadata

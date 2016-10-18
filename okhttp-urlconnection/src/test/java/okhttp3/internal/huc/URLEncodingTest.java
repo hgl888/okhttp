@@ -27,9 +27,9 @@ import okhttp3.OkUrlFactory;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.internal.Internal;
-import okhttp3.internal.InternalCache;
-import okhttp3.internal.http.CacheRequest;
-import okhttp3.internal.http.CacheStrategy;
+import okhttp3.internal.cache.CacheRequest;
+import okhttp3.internal.cache.CacheStrategy;
+import okhttp3.internal.cache.InternalCache;
 import org.junit.Ignore;
 import org.junit.Test;
 
@@ -137,7 +137,7 @@ public final class URLEncodingTest {
       @Override public void remove(Request request) throws IOException {
       }
 
-      @Override public void update(Response cached, Response network) throws IOException {
+      @Override public void update(Response cached, Response network) {
       }
 
       @Override public void trackConditionalCacheHit() {

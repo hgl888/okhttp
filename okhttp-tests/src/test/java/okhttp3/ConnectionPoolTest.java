@@ -24,10 +24,11 @@ import java.util.concurrent.TimeUnit;
 import javax.net.SocketFactory;
 import okhttp3.internal.Internal;
 import okhttp3.internal.RecordingOkAuthenticator;
-import okhttp3.internal.http.StreamAllocation;
-import okhttp3.internal.io.RealConnection;
+import okhttp3.internal.connection.RealConnection;
+import okhttp3.internal.connection.StreamAllocation;
 import org.junit.Test;
 
+import static okhttp3.TestUtil.awaitGarbageCollection;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -81,8 +82,10 @@ public final class ConnectionPoolTest {
     pool.cleanupRunning = true; // Prevent the cleanup runnable from being started.
 
     RealConnection c1 = newConnection(pool, routeA1, 50L);
-    StreamAllocation streamAllocation = new StreamAllocation(pool, addressA);
-    streamAllocation.acquire(c1);
+    synchronized (pool) {
+      StreamAllocation streamAllocation = new StreamAllocation(pool, addressA, null);
+      streamAllocation.acquire(c1);
+    }
 
     // Running at time 50, the pool returns that nothing can be evicted until time 150.
     assertEquals(100L, pool.cleanup(50L));
@@ -172,19 +175,10 @@ public final class ConnectionPoolTest {
 
   /** Use a helper method so there's no hidden reference remaining on the stack. */
   private void allocateAndLeakAllocation(ConnectionPool pool, RealConnection connection) {
-    StreamAllocation leak = new StreamAllocation(pool, connection.route().address());
-    leak.acquire(connection);
-  }
-
-  /**
-   * See FinalizationTester for discussion on how to best trigger GC in tests.
-   * https://android.googlesource.com/platform/libcore/+/master/support/src/test/java/libcore/
-   * java/lang/ref/FinalizationTester.java
-   */
-  private void awaitGarbageCollection() throws InterruptedException {
-    Runtime.getRuntime().gc();
-    Thread.sleep(100);
-    System.runFinalization();
+    synchronized (pool) {
+      StreamAllocation leak = new StreamAllocation(pool, connection.route().address(), null);
+      leak.acquire(connection);
+    }
   }
 
   private RealConnection newConnection(ConnectionPool pool, Route route, long idleAtNanos) {

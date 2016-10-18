@@ -26,10 +26,9 @@ import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.net.ssl.SSLContext;
 import okhttp3.HttpUrl;
 import okhttp3.Protocol;
-import okhttp3.internal.SslContextBuilder;
+import okhttp3.internal.tls.SslClient;
 import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -69,7 +68,7 @@ public class Benchmark extends com.google.caliper.Benchmark {
   @Param
   boolean gzip;
 
-  /** Don't combine chunked with SPDY_3 or HTTP_2; that's not allowed. */
+  /** Don't combine chunked with HTTP_2; that's not allowed. */
   @Param
   boolean chunked;
 
@@ -161,8 +160,8 @@ public class Benchmark extends com.google.caliper.Benchmark {
     MockWebServer server = new MockWebServer();
 
     if (tls) {
-      SSLContext sslContext = SslContextBuilder.localhost();
-      server.useHttps(sslContext.getSocketFactory(), false);
+      SslClient sslClient = SslClient.localhost();
+      server.useHttps(sslClient.socketFactory, false);
       server.setProtocols(protocols);
     }
 

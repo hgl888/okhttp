@@ -26,19 +26,18 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import okhttp3.internal.Platform;
-import okhttp3.internal.RouteDatabase;
 import okhttp3.internal.Util;
-import okhttp3.internal.http.StreamAllocation;
-import okhttp3.internal.io.RealConnection;
+import okhttp3.internal.connection.RealConnection;
+import okhttp3.internal.connection.RouteDatabase;
+import okhttp3.internal.connection.StreamAllocation;
+import okhttp3.internal.platform.Platform;
 
-import static okhttp3.internal.Platform.WARN;
 import static okhttp3.internal.Util.closeQuietly;
 
 /**
- * Manages reuse of HTTP and SPDY connections for reduced network latency. HTTP requests that share
- * the same {@link Address} may share a {@link Connection}. This class implements the policy of
- * which connections to keep open for future use.
+ * Manages reuse of HTTP and HTTP/2 connections for reduced network latency. HTTP requests that
+ * share the same {@link Address} may share a {@link Connection}. This class implements the policy
+ * of which connections to keep open for future use.
  */
 public final class ConnectionPool {
   /**
@@ -106,7 +105,7 @@ public final class ConnectionPool {
 
   /**
    * Returns total number of connections in the pool. Note that prior to OkHttp 2.7 this included
-   * only idle connections and SPDY connections. Since OkHttp 2.7 this includes all connections,
+   * only idle connections and HTTP/2 connections. Since OkHttp 2.7 this includes all connections,
    * both active and inactive. Use {@link #idleConnectionCount()} to count connections not currently
    * in use.
    */
@@ -246,8 +245,12 @@ public final class ConnectionPool {
       }
 
       // We've discovered a leaked allocation. This is an application bug.
-      Platform.get().log(WARN, "A connection to " + connection.route().address().url()
-          + " was leaked. Did you forget to close a response body?", null);
+      StreamAllocation.StreamAllocationReference streamAllocRef =
+          (StreamAllocation.StreamAllocationReference) reference;
+      String message = "A connection to " + connection.route().address().url()
+          + " was leaked. Did you forget to close a response body?";
+      Platform.get().logCloseableLeak(message, streamAllocRef.callStackTrace);
+
       references.remove(i);
       connection.noNewStreams = true;
 

@@ -28,15 +28,16 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
-import okhttp3.internal.DiskLruCache;
-import okhttp3.internal.InternalCache;
 import okhttp3.internal.Util;
-import okhttp3.internal.http.CacheRequest;
-import okhttp3.internal.http.CacheStrategy;
+import okhttp3.internal.cache.CacheRequest;
+import okhttp3.internal.cache.CacheStrategy;
+import okhttp3.internal.cache.DiskLruCache;
+import okhttp3.internal.cache.InternalCache;
+import okhttp3.internal.http.HttpHeaders;
 import okhttp3.internal.http.HttpMethod;
-import okhttp3.internal.http.OkHeaders;
 import okhttp3.internal.http.StatusLine;
 import okhttp3.internal.io.FileSystem;
+import okhttp3.internal.platform.Platform;
 import okio.Buffer;
 import okio.BufferedSink;
 import okio.BufferedSource;
@@ -151,7 +152,7 @@ public final class Cache implements Closeable, Flushable {
       Cache.this.remove(request);
     }
 
-    @Override public void update(Response cached, Response network) throws IOException {
+    @Override public void update(Response cached, Response network) {
       Cache.this.update(cached, network);
     }
 
@@ -216,7 +217,7 @@ public final class Cache implements Closeable, Flushable {
     return response;
   }
 
-  private CacheRequest put(Response response) throws IOException {
+  private CacheRequest put(Response response) {
     String requestMethod = response.request().method();
 
     if (HttpMethod.invalidatesCache(response.request().method())) {
@@ -234,7 +235,7 @@ public final class Cache implements Closeable, Flushable {
       return null;
     }
 
-    if (OkHeaders.hasVaryAll(response)) {
+    if (HttpHeaders.hasVaryAll(response)) {
       return null;
     }
 
@@ -431,7 +432,7 @@ public final class Cache implements Closeable, Flushable {
     private boolean done;
     private Sink body;
 
-    public CacheRequestImpl(final DiskLruCache.Editor editor) throws IOException {
+    public CacheRequestImpl(final DiskLruCache.Editor editor) {
       this.editor = editor;
       this.cacheOut = editor.newSink(ENTRY_BODY);
       this.body = new ForwardingSink(cacheOut) {
@@ -470,6 +471,12 @@ public final class Cache implements Closeable, Flushable {
   }
 
   private static final class Entry {
+    /** Synthetic response header: the local time when the request was sent. */
+    private static final String SENT_MILLIS = Platform.get().getPrefix() + "-Sent-Millis";
+
+    /** Synthetic response header: the local time when the response was received. */
+    private static final String RECEIVED_MILLIS = Platform.get().getPrefix() + "-Received-Millis";
+
     private final String url;
     private final Headers varyHeaders;
     private final String requestMethod;
@@ -550,10 +557,10 @@ public final class Cache implements Closeable, Flushable {
         for (int i = 0; i < responseHeaderLineCount; i++) {
           responseHeadersBuilder.addLenient(source.readUtf8LineStrict());
         }
-        String sendRequestMillisString = responseHeadersBuilder.get(OkHeaders.SENT_MILLIS);
-        String receivedResponseMillisString = responseHeadersBuilder.get(OkHeaders.RECEIVED_MILLIS);
-        responseHeadersBuilder.removeAll(OkHeaders.SENT_MILLIS);
-        responseHeadersBuilder.removeAll(OkHeaders.RECEIVED_MILLIS);
+        String sendRequestMillisString = responseHeadersBuilder.get(SENT_MILLIS);
+        String receivedResponseMillisString = responseHeadersBuilder.get(RECEIVED_MILLIS);
+        responseHeadersBuilder.removeAll(SENT_MILLIS);
+        responseHeadersBuilder.removeAll(RECEIVED_MILLIS);
         sentRequestMillis = sendRequestMillisString != null
             ? Long.parseLong(sendRequestMillisString)
             : 0L;
@@ -585,7 +592,7 @@ public final class Cache implements Closeable, Flushable {
 
     public Entry(Response response) {
       this.url = response.request().url().toString();
-      this.varyHeaders = OkHeaders.varyHeaders(response);
+      this.varyHeaders = HttpHeaders.varyHeaders(response);
       this.requestMethod = response.request().method();
       this.protocol = response.protocol();
       this.code = response.code();
@@ -622,11 +629,11 @@ public final class Cache implements Closeable, Flushable {
             .writeUtf8(responseHeaders.value(i))
             .writeByte('\n');
       }
-      sink.writeUtf8(OkHeaders.SENT_MILLIS)
+      sink.writeUtf8(SENT_MILLIS)
           .writeUtf8(": ")
           .writeDecimalLong(sentRequestMillis)
           .writeByte('\n');
-      sink.writeUtf8(OkHeaders.RECEIVED_MILLIS)
+      sink.writeUtf8(RECEIVED_MILLIS)
           .writeUtf8(": ")
           .writeDecimalLong(receivedResponseMillis)
           .writeByte('\n');
@@ -688,7 +695,7 @@ public final class Cache implements Closeable, Flushable {
     public boolean matches(Request request, Response response) {
       return url.equals(request.url().toString())
           && requestMethod.equals(request.method())
-          && OkHeaders.varyMatches(response, varyHeaders, request);
+          && HttpHeaders.varyMatches(response, varyHeaders, request);
     }
 
     public Response response(DiskLruCache.Snapshot snapshot) {

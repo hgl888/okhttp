@@ -21,11 +21,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import okhttp3.internal.Util;
 import okhttp3.internal.http.HttpDate;
@@ -159,7 +159,7 @@ public final class Headers {
   }
 
   public Map<String, List<String>> toMultimap() {
-    Map<String, List<String>> result = new LinkedHashMap<>();
+    Map<String, List<String>> result = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
     for (int i = 0, size = size(); i < size; i++) {
       String name = name(i).toLowerCase(Locale.US);
       List<String> values = result.get(name);
@@ -316,7 +316,7 @@ public final class Headers {
       if (value == null) throw new NullPointerException("value == null");
       for (int i = 0, length = value.length(); i < length; i++) {
         char c = value.charAt(i);
-        if (c <= '\u001f' || c >= '\u007f') {
+        if ((c <= '\u001f' && c != '\u0009' /* htab */) || c >= '\u007f') {
           throw new IllegalArgumentException(Util.format(
               "Unexpected char %#04x at %d in %s value: %s", (int) c, i, name, value));
         }

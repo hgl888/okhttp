@@ -30,12 +30,12 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
-import okhttp3.internal.Platform;
-import okhttp3.internal.http.HttpEngine;
+import okhttp3.internal.http.HttpHeaders;
+import okhttp3.internal.platform.Platform;
 import okio.Buffer;
 import okio.BufferedSource;
 
-import static okhttp3.internal.Platform.INFO;
+import static okhttp3.internal.platform.Platform.INFO;
 
 /**
  * An OkHttp interceptor which logs request and response information. Can be applied as an
@@ -90,7 +90,7 @@ public final class HttpLoggingInterceptor implements Interceptor {
      * Content-Length: 3
      *
      * Hi?
-     * --> END GET
+     * --> END POST
      *
      * <-- 200 OK (22ms)
      * Content-Type: plain/text
@@ -229,7 +229,7 @@ public final class HttpLoggingInterceptor implements Interceptor {
         logger.log(headers.name(i) + ": " + headers.value(i));
       }
 
-      if (!logBody || !HttpEngine.hasBody(response)) {
+      if (!logBody || !HttpHeaders.hasBody(response)) {
         logger.log("<-- END HTTP");
       } else if (bodyEncoded(response.headers())) {
         logger.log("<-- END HTTP (encoded body omitted)");
@@ -274,7 +274,7 @@ public final class HttpLoggingInterceptor implements Interceptor {
    * Returns true if the body in question probably contains human readable text. Uses a small sample
    * of code points to detect unicode control characters commonly used in binary file signatures.
    */
-  static boolean isPlaintext(Buffer buffer) throws EOFException {
+  static boolean isPlaintext(Buffer buffer) {
     try {
       Buffer prefix = new Buffer();
       long byteCount = buffer.size() < 64 ? buffer.size() : 64;
@@ -283,7 +283,8 @@ public final class HttpLoggingInterceptor implements Interceptor {
         if (prefix.exhausted()) {
           break;
         }
-        if (Character.isISOControl(prefix.readUtf8CodePoint())) {
+        int codePoint = prefix.readUtf8CodePoint();
+        if (Character.isISOControl(codePoint) && !Character.isWhitespace(codePoint)) {
           return false;
         }
       }

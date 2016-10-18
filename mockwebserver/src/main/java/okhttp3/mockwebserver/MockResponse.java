@@ -20,8 +20,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import okhttp3.Headers;
 import okhttp3.internal.Internal;
-import okhttp3.internal.framed.Settings;
-import okhttp3.ws.WebSocketListener;
+import okhttp3.internal.http2.Settings;
+import okhttp3.WebSocketListener;
 import okio.Buffer;
 
 /** A scripted response to be replayed by the mock web server. */
@@ -38,6 +38,7 @@ public final class MockResponse implements Cloneable {
   private TimeUnit throttlePeriodUnit = TimeUnit.SECONDS;
 
   private SocketPolicy socketPolicy = SocketPolicy.KEEP_OPEN;
+  private int http2ErrorCode = -1;
 
   private long bodyDelayAmount = 0;
   private TimeUnit bodyDelayUnit = TimeUnit.MILLISECONDS;
@@ -202,6 +203,20 @@ public final class MockResponse implements Cloneable {
 
   public MockResponse setSocketPolicy(SocketPolicy socketPolicy) {
     this.socketPolicy = socketPolicy;
+    return this;
+  }
+
+  public int getHttp2ErrorCode() {
+    return http2ErrorCode;
+  }
+
+  /**
+   * Sets the <a href="https://tools.ietf.org/html/rfc7540#section-7">HTTP/2 error code</a> to be
+   * returned when resetting the stream. This is only valid with {@link
+   * SocketPolicy#RESET_STREAM_AT_START}.
+   */
+  public MockResponse setHttp2ErrorCode(int http2ErrorCode) {
+    this.http2ErrorCode = http2ErrorCode;
     return this;
   }
 

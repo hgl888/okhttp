@@ -23,7 +23,9 @@ import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import javax.net.SocketFactory;
 import javax.net.ssl.HostnameVerifier;
@@ -34,47 +36,93 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
 import okhttp3.internal.Internal;
-import okhttp3.internal.InternalCache;
-import okhttp3.internal.Platform;
-import okhttp3.internal.RouteDatabase;
 import okhttp3.internal.Util;
-import okhttp3.internal.http.StreamAllocation;
-import okhttp3.internal.io.RealConnection;
+import okhttp3.internal.cache.InternalCache;
+import okhttp3.internal.connection.RealConnection;
+import okhttp3.internal.connection.RouteDatabase;
+import okhttp3.internal.connection.StreamAllocation;
+import okhttp3.internal.platform.Platform;
 import okhttp3.internal.tls.CertificateChainCleaner;
 import okhttp3.internal.tls.OkHostnameVerifier;
 
 /**
  * Factory for {@linkplain Call calls}, which can be used to send HTTP requests and read their
- * responses. Most applications can use a single OkHttpClient for all of their HTTP requests,
- * benefiting from a shared response cache, thread pool, connection re-use, etc.
+ * responses.
  *
- * <p>To create an {@code OkHttpClient} with the default settings, use the {@linkplain
- * #OkHttpClient() default constructor}. Or create a configured instance with {@link
- * OkHttpClient.Builder}. To adjust an existing client before making a request, use {@link
- * #newBuilder()}. This example shows a call with a 30 second timeout:
+ * <h3>OkHttpClients should be shared</h3>
+ *
+ * <p>OkHttp performs best when you create a single {@code OkHttpClient} instance and reuse it for
+ * all of your HTTP calls. This is because each client holds its own connection pool and thread
+ * pools. Reusing connections and threads reduces latency and saves memory. Conversely, creating a
+ * client for each request wastes resources on idle pools.
+ *
+ * <p>Use {@code new OkHttpClient()} to create a shared instance with the default settings:
  * <pre>   {@code
  *
- *   OkHttpClient client = ...
- *   OkHttpClient clientWith30sTimeout = client.newBuilder()
- *       .readTimeout(30, TimeUnit.SECONDS)
- *       .build();
- *   Response response = clientWith30sTimeout.newCall(request).execute();
+ *   // The singleton HTTP client.
+ *   public final OkHttpClient client = new OkHttpClient();
  * }</pre>
+ *
+ * <p>Or use {@code new OkHttpClient.Builder()} to create a shared instance with custom settings:
+ * <pre>   {@code
+ *
+ *   // The singleton HTTP client.
+ *   public final OkHttpClient client = new OkHttpClient.Builder()
+ *       .addInterceptor(new HttpLoggingInterceptor())
+ *       .cache(new Cache(cacheDir, cacheSize))
+ *       .build();
+ * }</pre>
+ *
+ * <h3>Customize your client with newBuilder()</h3>
+ *
+ * <p>You can customize a shared OkHttpClient instance with {@link #newBuilder()}. This builds a
+ * client that shares the same connection pool, thread pools, and configuration. Use the builder
+ * methods to configure the derived client for a specific purpose.
+ *
+ * <p>This example shows a call with a short 500 millisecond timeout: <pre>   {@code
+ *
+ *   OkHttpClient eagerClient = client.newBuilder()
+ *       .readTimeout(500, TimeUnit.MILLISECONDS)
+ *       .build();
+ *   Response response = eagerClient.newCall(request).execute();
+ * }</pre>
+ *
+ * <h3>Shutdown isn't necessary</h3>
+ *
+ * <p>The threads and connections that are held will be released automatically if they remain idle.
+ * But if you are writing a application that needs to aggressively release unused resources you may
+ * do so.
+ *
+ * <p>Shutdown the dispatcher's executor service with {@link ExecutorService#shutdown shutdown()}.
+ * This will also cause future calls to the client to be rejected. <pre>   {@code
+ *
+ *     client.dispatcher().executorService().shutdown();
+ * }</pre>
+ *
+ * <p>Clear the connection pool with {@link ConnectionPool#evictAll() evictAll()}. Note that the
+ * connection pool's daemon thread may not exit immediately. <pre>   {@code
+ *
+ *     client.connectionPool().evictAll();
+ * }</pre>
+ *
+ * <p>If your client has a cache, call {@link Cache#close close()}. Note that it is an error to
+ * create calls against a cache that is closed, and doing so will cause the call to crash.
+ * <pre>   {@code
+ *
+ *     client.cache().close();
+ * }</pre>
+ *
+ * <p>OkHttp also uses daemon threads for HTTP/2 connections. These will exit automatically if they
+ * remain idle.
  */
-public class OkHttpClient implements Cloneable, Call.Factory {
+public class OkHttpClient implements Cloneable, Call.Factory, WebSocketCall.Factory {
   private static final List<Protocol> DEFAULT_PROTOCOLS = Util.immutableList(
-      Protocol.HTTP_2, Protocol.SPDY_3, Protocol.HTTP_1_1);
+      Protocol.HTTP_2, Protocol.HTTP_1_1);
 
-  private static final List<ConnectionSpec> DEFAULT_CONNECTION_SPECS;
+  private static final List<ConnectionSpec> DEFAULT_CONNECTION_SPECS = Util.immutableList(
+      ConnectionSpec.MODERN_TLS, ConnectionSpec.COMPATIBLE_TLS, ConnectionSpec.CLEARTEXT);
 
   static {
-    List<ConnectionSpec> connSpecs = new ArrayList<>(Arrays.asList(ConnectionSpec.MODERN_TLS,
-        ConnectionSpec.COMPATIBLE_TLS));
-    if (Platform.get().isCleartextTrafficPermitted()) {
-      connSpecs.add(ConnectionSpec.CLEARTEXT);
-    }
-    DEFAULT_CONNECTION_SPECS = Util.immutableList(connSpecs);
-
     Internal.instance = new Internal() {
       @Override public void addLenient(Headers.Builder builder, String line) {
         builder.addLenient(line);
@@ -86,10 +134,6 @@ public class OkHttpClient implements Cloneable, Call.Factory {
 
       @Override public void setCache(OkHttpClient.Builder builder, InternalCache internalCache) {
         builder.setInternalCache(internalCache);
-      }
-
-      @Override public InternalCache internalCache(OkHttpClient client) {
-        return client.internalCache();
       }
 
       @Override public boolean connectionBecameIdle(
@@ -108,15 +152,6 @@ public class OkHttpClient implements Cloneable, Call.Factory {
 
       @Override public RouteDatabase routeDatabase(ConnectionPool connectionPool) {
         return connectionPool.routeDatabase;
-      }
-
-      @Override
-      public void callEnqueue(Call call, Callback responseCallback, boolean forWebSocket) {
-        ((RealCall) call).enqueue(responseCallback, forWebSocket);
-      }
-
-      @Override public StreamAllocation callEngineGetStreamAllocation(Call call) {
-        return ((RealCall) call).engine.streamAllocation;
       }
 
       @Override
@@ -342,7 +377,14 @@ public class OkHttpClient implements Cloneable, Call.Factory {
    * Prepares the {@code request} to be executed at some point in the future.
    */
   @Override public Call newCall(Request request) {
-    return new RealCall(this, request);
+    return new RealCall(this, request, false /* for web socket */);
+  }
+
+  /**
+   * Prepares the {@code request} to create a web socket at some point in the future.
+   */
+  @Override public WebSocketCall newWebSocketCall(Request request) {
+    return new RealWebSocketCall(this, request);
   }
 
   public Builder newBuilder() {
@@ -509,6 +551,7 @@ public class OkHttpClient implements Cloneable, Call.Factory {
       this.cache = null;
     }
 
+    /** Sets the response cache to be used to read and write cached responses. */
     public Builder cache(Cache cache) {
       this.cache = cache;
       this.internalCache = null;
@@ -669,7 +712,7 @@ public class OkHttpClient implements Cloneable, Call.Factory {
       return this;
     }
 
-    /** Configure this client to follow redirects. If unset, redirects be followed. */
+    /** Configure this client to follow redirects. If unset, redirects will be followed. */
     public Builder followRedirects(boolean followRedirects) {
       this.followRedirects = followRedirects;
       return this;
@@ -711,14 +754,12 @@ public class OkHttpClient implements Cloneable, Call.Factory {
      * Configure the protocols used by this client to communicate with remote servers. By default
      * this client will prefer the most efficient transport available, falling back to more
      * ubiquitous protocols. Applications should only call this method to avoid specific
-     * compatibility problems, such as web servers that behave incorrectly when SPDY is enabled.
+     * compatibility problems, such as web servers that behave incorrectly when HTTP/2 is enabled.
      *
      * <p>The following protocols are currently supported:
      *
      * <ul>
      *     <li><a href="http://www.w3.org/Protocols/rfc2616/rfc2616.html">http/1.1</a>
-     *     <li><a
-     *         href="http://www.chromium.org/spdy/spdy-protocol/spdy-protocol-draft3-1">spdy/3.1</a>
      *     <li><a href="http://tools.ietf.org/html/draft-ietf-httpbis-http2-17">h2</a>
      * </ul>
      *
@@ -737,7 +778,10 @@ public class OkHttpClient implements Cloneable, Call.Factory {
      * Protocol#HTTP_1_1}. It must not contain null or {@link Protocol#HTTP_1_0}.
      */
     public Builder protocols(List<Protocol> protocols) {
-      protocols = Util.immutableList(protocols);
+      // Create a private copy of the list.
+      protocols = new ArrayList<>(protocols);
+
+      // Validate that the list has everything we require and nothing we forbid.
       if (!protocols.contains(Protocol.HTTP_1_1)) {
         throw new IllegalArgumentException("protocols doesn't contain http/1.1: " + protocols);
       }
@@ -747,7 +791,14 @@ public class OkHttpClient implements Cloneable, Call.Factory {
       if (protocols.contains(null)) {
         throw new IllegalArgumentException("protocols must not contain null");
       }
-      this.protocols = Util.immutableList(protocols);
+
+      // Remove protocols that we no longer support.
+      if (protocols.contains(Protocol.SPDY_3)) {
+        protocols.remove(Protocol.SPDY_3);
+      }
+
+      // Assign as an unmodifiable list. This is effectively immutable.
+      this.protocols = Collections.unmodifiableList(protocols);
       return this;
     }
 

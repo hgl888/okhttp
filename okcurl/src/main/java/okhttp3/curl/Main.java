@@ -23,7 +23,6 @@ import io.airlift.airline.Option;
 import io.airlift.airline.SingleCommand;
 import java.io.IOException;
 import java.io.InputStream;
-import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Properties;
@@ -46,8 +45,8 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.internal.Util;
-import okhttp3.internal.framed.Http2;
 import okhttp3.internal.http.StatusLine;
+import okhttp3.internal.http2.Http2;
 import okio.BufferedSource;
 import okio.Okio;
 import okio.Sink;
@@ -179,7 +178,9 @@ public class Main extends HelpOption implements Runnable {
       builder.readTimeout(readTimeout, SECONDS);
     }
     if (allowInsecure) {
-      builder.sslSocketFactory(createInsecureSslSocketFactory());
+      X509TrustManager trustManager = createInsecureTrustManager();
+      SSLSocketFactory sslSocketFactory = createInsecureSslSocketFactory(trustManager);
+      builder.sslSocketFactory(sslSocketFactory, trustManager);
       builder.hostnameVerifier(createInsecureHostnameVerifier());
     }
     return builder.build();
@@ -240,23 +241,24 @@ public class Main extends HelpOption implements Runnable {
     client.connectionPool().evictAll(); // Close any persistent connections.
   }
 
-  private static SSLSocketFactory createInsecureSslSocketFactory() {
+  private static X509TrustManager createInsecureTrustManager() {
+    return new X509TrustManager() {
+      @Override public void checkClientTrusted(X509Certificate[] chain, String authType) {
+      }
+
+      @Override public void checkServerTrusted(X509Certificate[] chain, String authType) {
+      }
+
+      @Override public X509Certificate[] getAcceptedIssuers() {
+        return new X509Certificate[0];
+      }
+    };
+  }
+
+  private static SSLSocketFactory createInsecureSslSocketFactory(TrustManager trustManager) {
     try {
       SSLContext context = SSLContext.getInstance("TLS");
-      TrustManager permissive = new X509TrustManager() {
-        @Override public void checkClientTrusted(X509Certificate[] chain, String authType)
-            throws CertificateException {
-        }
-
-        @Override public void checkServerTrusted(X509Certificate[] chain, String authType)
-            throws CertificateException {
-        }
-
-        @Override public X509Certificate[] getAcceptedIssuers() {
-          return new X509Certificate[0];
-        }
-      };
-      context.init(null, new TrustManager[] {permissive}, null);
+      context.init(null, new TrustManager[] {trustManager}, null);
       return context.getSocketFactory();
     } catch (Exception e) {
       throw new AssertionError(e);
@@ -272,7 +274,7 @@ public class Main extends HelpOption implements Runnable {
   }
 
   private static void enableHttp2FrameLogging() {
-    frameLogger = Logger.getLogger(Http2.class.getName() + "$FrameLogger");
+    frameLogger = Logger.getLogger(Http2.class.getName());
     frameLogger.setLevel(Level.FINE);
     ConsoleHandler handler = new ConsoleHandler();
     handler.setLevel(Level.FINE);

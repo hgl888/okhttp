@@ -54,21 +54,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
 import okhttp3.AbstractResponseCache;
 import okhttp3.AndroidInternal;
 import okhttp3.AndroidShimResponseCache;
 import okhttp3.Headers;
 import okhttp3.OkHttpClient;
 import okhttp3.OkUrlFactory;
+import okhttp3.RecordingHostnameVerifier;
 import okhttp3.internal.Internal;
-import okhttp3.internal.InternalCache;
-import okhttp3.internal.SslContextBuilder;
+import okhttp3.internal.cache.InternalCache;
+import okhttp3.internal.tls.SslClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import okhttp3.mockwebserver.SocketPolicy;
-import okhttp3.RecordingHostnameVerifier;
 import okio.Buffer;
 import okio.BufferedSink;
 import okio.GzipSink;
@@ -85,6 +84,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeFalse;
 
 /**
  * Tests the interaction between OkHttp and {@link ResponseCache}. Based on okhttp3.CacheTest with
@@ -96,7 +96,7 @@ public final class ResponseCacheTest {
   @Rule public MockWebServer server2 = new MockWebServer();
 
   private HostnameVerifier hostnameVerifier = new RecordingHostnameVerifier();
-  private SSLContext sslContext = SslContextBuilder.localhost();
+  private SslClient sslClient = SslClient.localhost();
   private ResponseCache cache;
   private CookieManager cookieManager;
   private OkUrlFactory urlFactory;
@@ -191,6 +191,9 @@ public final class ResponseCacheTest {
       mockResponse.addHeader("Proxy-Authenticate: Basic realm=\"protected area\"");
     } else if (responseCode == HttpURLConnection.HTTP_UNAUTHORIZED) {
       mockResponse.addHeader("WWW-Authenticate: Basic realm=\"protected area\"");
+    } else if (responseCode == HttpURLConnection.HTTP_NO_CONTENT
+        || responseCode == HttpURLConnection.HTTP_RESET) {
+      mockResponse.setBody(""); // We forbid bodies for 204 and 205.
     }
     server.enqueue(mockResponse);
 
@@ -267,14 +270,16 @@ public final class ResponseCacheTest {
   }
 
   @Test public void secureResponseCaching() throws IOException {
-    server.useHttps(sslContext.getSocketFactory(), false);
+    assumeFalse(getPlatform().equals("jdk9"));
+
+    server.useHttps(sslClient.socketFactory, false);
     server.enqueue(new MockResponse()
         .addHeader("Last-Modified: " + formatDate(-1, TimeUnit.HOURS))
         .addHeader("Expires: " + formatDate(1, TimeUnit.HOURS))
         .setBody("ABC"));
 
     HttpsURLConnection c1 = (HttpsURLConnection) openConnection(server.url("/").url());
-    c1.setSSLSocketFactory(sslContext.getSocketFactory());
+    c1.setSSLSocketFactory(sslClient.socketFactory);
     c1.setHostnameVerifier(hostnameVerifier);
     assertEquals("ABC", readAscii(c1));
 
@@ -286,7 +291,7 @@ public final class ResponseCacheTest {
     Principal localPrincipal = c1.getLocalPrincipal();
 
     HttpsURLConnection c2 = (HttpsURLConnection) openConnection(server.url("/").url()); // cached!
-    c2.setSSLSocketFactory(sslContext.getSocketFactory());
+    c2.setSSLSocketFactory(sslClient.socketFactory);
     c2.setHostnameVerifier(hostnameVerifier);
     assertEquals("ABC", readAscii(c2));
 
@@ -345,7 +350,7 @@ public final class ResponseCacheTest {
   }
 
   @Test public void secureResponseCachingAndRedirects() throws IOException {
-    server.useHttps(sslContext.getSocketFactory(), false);
+    server.useHttps(sslClient.socketFactory, false);
     server.enqueue(new MockResponse()
         .addHeader("Last-Modified: " + formatDate(-1, TimeUnit.HOURS))
         .addHeader("Expires: " + formatDate(1, TimeUnit.HOURS))
@@ -359,7 +364,7 @@ public final class ResponseCacheTest {
         .setBody("DEF"));
 
     urlFactory.setClient(urlFactory.client().newBuilder()
-        .sslSocketFactory(sslContext.getSocketFactory())
+        .sslSocketFactory(sslClient.socketFactory, sslClient.trustManager)
         .hostnameVerifier(hostnameVerifier)
         .build());
 
@@ -383,7 +388,7 @@ public final class ResponseCacheTest {
    * https://github.com/square/okhttp/issues/214
    */
   @Test public void secureResponseCachingAndProtocolRedirects() throws IOException {
-    server2.useHttps(sslContext.getSocketFactory(), false);
+    server2.useHttps(sslClient.socketFactory, false);
     server2.enqueue(new MockResponse()
         .addHeader("Last-Modified: " + formatDate(-1, TimeUnit.HOURS))
         .addHeader("Expires: " + formatDate(1, TimeUnit.HOURS))
@@ -398,7 +403,7 @@ public final class ResponseCacheTest {
         .addHeader("Location: " + server2.url("/").url()));
 
     urlFactory.setClient(urlFactory.client().newBuilder()
-        .sslSocketFactory(sslContext.getSocketFactory())
+        .sslSocketFactory(sslClient.socketFactory, sslClient.trustManager)
         .hostnameVerifier(hostnameVerifier)
         .build());
 
@@ -1461,7 +1466,7 @@ public final class ResponseCacheTest {
   }
 
   @Test public void varyAndHttps() throws Exception {
-    server.useHttps(sslContext.getSocketFactory(), false);
+    server.useHttps(sslClient.socketFactory, false);
     server.enqueue(new MockResponse()
         .addHeader("Cache-Control: max-age=60")
         .addHeader("Vary: Accept-Language")
@@ -1470,7 +1475,7 @@ public final class ResponseCacheTest {
         .setBody("B"));
 
     urlFactory.setClient(urlFactory.client().newBuilder()
-        .sslSocketFactory(sslContext.getSocketFactory())
+        .sslSocketFactory(sslClient.socketFactory, sslClient.trustManager)
         .hostnameVerifier(hostnameVerifier)
         .build());
 
@@ -1981,20 +1986,22 @@ public final class ResponseCacheTest {
   }
 
   @Test public void cacheReturnsInsecureResponseForSecureRequest() throws IOException {
-    server.useHttps(sslContext.getSocketFactory(), false);
+    assumeFalse(getPlatform().equals("jdk9"));
+
+    server.useHttps(sslClient.socketFactory, false);
     server.enqueue(new MockResponse().setBody("ABC"));
     server.enqueue(new MockResponse().setBody("DEF"));
 
     AndroidInternal.setResponseCache(urlFactory, new InsecureResponseCache(cache));
 
     HttpsURLConnection connection1 = (HttpsURLConnection) openConnection(server.url("/").url());
-    connection1.setSSLSocketFactory(sslContext.getSocketFactory());
+    connection1.setSSLSocketFactory(sslClient.socketFactory);
     connection1.setHostnameVerifier(hostnameVerifier);
     assertEquals("ABC", readAscii(connection1));
 
     // Not cached!
     HttpsURLConnection connection2 = (HttpsURLConnection) openConnection(server.url("/").url());
-    connection2.setSSLSocketFactory(sslContext.getSocketFactory());
+    connection2.setSSLSocketFactory(sslClient.socketFactory);
     connection2.setHostnameVerifier(hostnameVerifier);
     assertEquals("DEF", readAscii(connection2));
   }
@@ -2100,11 +2107,11 @@ public final class ResponseCacheTest {
 
     // Use the platform's HTTP stack.
     URLConnection connection = server.url("/").url().openConnection();
-    assertFalse(connection instanceof HttpURLConnectionImpl);
+    assertFalse(connection instanceof OkHttpURLConnection);
     assertEquals("A", readAscii(connection));
 
     URLConnection connection2 = server.url("/").url().openConnection();
-    assertFalse(connection2 instanceof HttpURLConnectionImpl);
+    assertFalse(connection2 instanceof OkHttpURLConnection);
     assertEquals("A", readAscii(connection2));
   }
 
@@ -2124,11 +2131,11 @@ public final class ResponseCacheTest {
 
     // Use the platform's HTTP stack.
     URLConnection connection = server.url("/").url().openConnection();
-    assertFalse(connection instanceof HttpURLConnectionImpl);
+    assertFalse(connection instanceof OkHttpURLConnection);
     assertEquals("A", readAscii(connection));
 
     URLConnection connection2 = server.url("/").url().openConnection();
-    assertFalse(connection2 instanceof HttpURLConnectionImpl);
+    assertFalse(connection2 instanceof OkHttpURLConnection);
     assertEquals("B", readAscii(connection2));
   }
 
@@ -2148,12 +2155,12 @@ public final class ResponseCacheTest {
 
     // Use the platform's HTTP stack.
     URLConnection connection = server.url("/").url().openConnection();
-    assertFalse(connection instanceof HttpURLConnectionImpl);
+    assertFalse(connection instanceof OkHttpURLConnection);
     connection.setRequestProperty("Accept-Language", "en-US");
     assertEquals("A", readAscii(connection));
 
     URLConnection connection2 = server.url("/").url().openConnection();
-    assertFalse(connection2 instanceof HttpURLConnectionImpl);
+    assertFalse(connection2 instanceof OkHttpURLConnection);
     assertEquals("B", readAscii(connection2));
   }
 
@@ -2173,11 +2180,11 @@ public final class ResponseCacheTest {
 
     // Use the platform's HTTP stack.
     URLConnection connection = server.url("/").url().openConnection();
-    assertFalse(connection instanceof HttpURLConnectionImpl);
+    assertFalse(connection instanceof OkHttpURLConnection);
     assertEquals("A", readAscii(connection));
 
     URLConnection connection2 = server.url("/").url().openConnection();
-    assertFalse(connection2 instanceof HttpURLConnectionImpl);
+    assertFalse(connection2 instanceof OkHttpURLConnection);
     assertEquals("B", readAscii(connection2));
   }
 
@@ -2185,5 +2192,9 @@ public final class ResponseCacheTest {
     OkHttpClient.Builder builder = urlFactory.client().newBuilder();
     Internal.instance.setCache(builder, internalCache);
     urlFactory.setClient(builder.build());
+  }
+
+  private String getPlatform() {
+    return System.getProperty("okhttp.platform", "platform");
   }
 }
