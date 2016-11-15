@@ -39,7 +39,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLSession;
 import okhttp3.internal.Internal;
-import okhttp3.internal.Util;
 import okhttp3.internal.io.InMemoryFileSystem;
 import okhttp3.internal.platform.Platform;
 import okhttp3.internal.tls.SslClient;
@@ -934,6 +933,13 @@ public final class CacheTest {
     assertEquals("BB", get(url).body().string());
   }
 
+  /**
+   * When the server returns a full response body we will store it and return it regardless of what
+   * its Last-Modified date is. This behavior was different prior to OkHttp 3.5 when we would prefer
+   * the response with the later Last-Modified date.
+   *
+   * https://github.com/square/okhttp/issues/2886
+   */
   @Test public void serverReturnsDocumentOlderThanCache() throws Exception {
     server.enqueue(new MockResponse()
         .setBody("A")
@@ -942,11 +948,14 @@ public final class CacheTest {
     server.enqueue(new MockResponse()
         .setBody("B")
         .addHeader("Last-Modified: " + formatDate(-4, TimeUnit.HOURS)));
+    server.enqueue(new MockResponse()
+        .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
 
     HttpUrl url = server.url("/");
 
     assertEquals("A", get(url).body().string());
-    assertEquals("A", get(url).body().string());
+    assertEquals("B", get(url).body().string());
+    assertEquals("B", get(url).body().string());
   }
 
   @Test public void clientSideNoStore() throws Exception {
@@ -1943,7 +1952,7 @@ public final class CacheTest {
         .setResponseCode(HttpURLConnection.HTTP_NOT_MODIFIED));
 
     HttpUrl url = server.url("/");
-    String urlKey = Util.md5Hex(url.toString());
+    String urlKey = Cache.key(url);
     String entryMetadata = ""
         + "" + url + "\n"
         + "GET\n"
@@ -1993,7 +2002,7 @@ public final class CacheTest {
   /** Exercise the cache format in OkHttp 2.7 and all earlier releases. */
   @Test public void testGoldenCacheHttpsResponseOkHttp27() throws Exception {
     HttpUrl url = server.url("/");
-    String urlKey = Util.md5Hex(url.toString());
+    String urlKey = Cache.key(url);
     String prefix = Platform.get().getPrefix();
     String entryMetadata = ""
         + "" + url + "\n"
@@ -2042,7 +2051,7 @@ public final class CacheTest {
   /** The TLS version is present in OkHttp 3.0 and beyond. */
   @Test public void testGoldenCacheHttpsResponseOkHttp30() throws Exception {
     HttpUrl url = server.url("/");
-    String urlKey = Util.md5Hex(url.toString());
+    String urlKey = Cache.key(url);
     String prefix = Platform.get().getPrefix();
     String entryMetadata = ""
         + "" + url + "\n"
@@ -2091,7 +2100,7 @@ public final class CacheTest {
 
   @Test public void testGoldenCacheHttpResponseOkHttp30() throws Exception {
     HttpUrl url = server.url("/");
-    String urlKey = Util.md5Hex(url.toString());
+    String urlKey = Cache.key(url);
     String prefix = Platform.get().getPrefix();
     String entryMetadata = ""
         + "" + url + "\n"
