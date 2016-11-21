@@ -21,8 +21,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import okhttp3.NewWebSocket;
 import okhttp3.Response;
-import okhttp3.ResponseBody;
-import okhttp3.WebSocket;
 import okhttp3.internal.Util;
 import okhttp3.internal.platform.Platform;
 import okio.ByteString;
@@ -142,14 +140,24 @@ public final class NewWebSocketRecorder extends NewWebSocket.Listener {
     assertEquals(new Message(ByteString.of(payload)), actual);
   }
 
+  public void assertPing(ByteString payload) {
+    Object actual = nextEvent();
+    assertEquals(new Ping(payload), actual);
+  }
+
   public void assertPong(ByteString payload) {
     Object actual = nextEvent();
     assertEquals(new Pong(payload), actual);
   }
 
-  public void assertClose(int code, String reason) {
+  public void assertClosing(int code, String reason) {
     Object actual = nextEvent();
     assertEquals(new Closing(code, reason), actual);
+  }
+
+  public void assertClosed(int code, String reason) {
+    Object actual = nextEvent();
+    assertEquals(new Closed(code, reason), actual);
   }
 
   public void assertExhausted() {
@@ -198,6 +206,31 @@ public final class NewWebSocketRecorder extends NewWebSocket.Listener {
     }
     assertEquals(cls, failure.t.getClass());
     assertEquals(message, failure.t.getMessage());
+  }
+
+  /** Expose this recorder as a frame callback and shim in "ping" events. */
+  public WebSocketReader.FrameCallback asFrameCallback() {
+    return new WebSocketReader.FrameCallback() {
+      @Override public void onReadMessage(String text) throws IOException {
+        onMessage(null, text);
+      }
+
+      @Override public void onReadMessage(ByteString bytes) throws IOException {
+        onMessage(null, bytes);
+      }
+
+      @Override public void onReadPing(ByteString payload) {
+        events.add(new Ping(payload));
+      }
+
+      @Override public void onReadPong(ByteString payload) {
+        events.add(new Pong(payload));
+      }
+
+      @Override public void onReadClose(int code, String reason) {
+        onClosing(null, code, reason);
+      }
+    };
   }
 
   static final class Open {
@@ -269,10 +302,31 @@ public final class NewWebSocketRecorder extends NewWebSocket.Listener {
     }
   }
 
+  static final class Ping {
+    public final ByteString payload;
+
+    public Ping(ByteString payload) {
+      this.payload = payload;
+    }
+
+    @Override public String toString() {
+      return "Ping[" + payload + "]";
+    }
+
+    @Override public int hashCode() {
+      return payload.hashCode();
+    }
+
+    @Override public boolean equals(Object other) {
+      return other instanceof Ping
+          && ((Ping) other).payload.equals(payload);
+    }
+  }
+
   static final class Pong {
     public final ByteString payload;
 
-    Pong(ByteString payload) {
+    public Pong(ByteString payload) {
       this.payload = payload;
     }
 
@@ -284,12 +338,9 @@ public final class NewWebSocketRecorder extends NewWebSocket.Listener {
       return payload.hashCode();
     }
 
-    @Override public boolean equals(Object obj) {
-      if (obj instanceof Pong) {
-        Pong other = (Pong) obj;
-        return payload == null ? other.payload == null : payload.equals(other.payload);
-      }
-      return false;
+    @Override public boolean equals(Object other) {
+      return other instanceof Pong
+          && ((Pong) other).payload.equals(payload);
     }
   }
 
@@ -338,63 +389,6 @@ public final class NewWebSocketRecorder extends NewWebSocket.Listener {
       return other instanceof Closed
           && ((Closed) other).code == code
           && ((Closed) other).reason.equals(reason);
-    }
-  }
-
-  /** Expose this recorder as a frame callback and shim in "ping" events. */
-  WebSocketReader.FrameCallback asFrameCallback() {
-    return new WebSocketReader.FrameCallback() {
-      @Override public void onReadMessage(ResponseBody body) throws IOException {
-        if (body.contentType().equals(WebSocket.TEXT)) {
-          String text = body.source().readUtf8();
-          onMessage(null, text);
-        } else if (body.contentType().equals(WebSocket.BINARY)) {
-          ByteString bytes = body.source().readByteString();
-          onMessage(null, bytes);
-        } else {
-          throw new IllegalArgumentException();
-        }
-      }
-
-      @Override public void onReadPing(ByteString payload) {
-        events.add(new Ping(payload));
-      }
-
-      @Override public void onReadPong(ByteString padload) {
-      }
-
-      @Override public void onReadClose(int code, String reason) {
-        onClosing(null, code, reason);
-      }
-    };
-  }
-
-  void assertPing(ByteString payload) {
-    Object actual = nextEvent();
-    assertEquals(new Ping(payload), actual);
-  }
-
-  static final class Ping {
-    public final ByteString buffer;
-
-    Ping(ByteString buffer) {
-      this.buffer = buffer;
-    }
-
-    @Override public String toString() {
-      return "Ping[" + buffer + "]";
-    }
-
-    @Override public int hashCode() {
-      return buffer.hashCode();
-    }
-
-    @Override public boolean equals(Object obj) {
-      if (obj instanceof Ping) {
-        Ping other = (Ping) obj;
-        return buffer == null ? other.buffer == null : buffer.equals(other.buffer);
-      }
-      return false;
     }
   }
 }
