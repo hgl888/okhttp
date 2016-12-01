@@ -45,7 +45,7 @@ import okhttp3.internal.connection.StreamAllocation;
 import okhttp3.internal.platform.Platform;
 import okhttp3.internal.tls.CertificateChainCleaner;
 import okhttp3.internal.tls.OkHostnameVerifier;
-import okhttp3.internal.ws.RealNewWebSocket;
+import okhttp3.internal.ws.RealWebSocket;
 
 /**
  * Factory for {@linkplain Call calls}, which can be used to send HTTP requests and read their
@@ -117,11 +117,11 @@ import okhttp3.internal.ws.RealNewWebSocket;
  * <p>OkHttp also uses daemon threads for HTTP/2 connections. These will exit automatically if they
  * remain idle.
  */
-public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Factory {
-  private static final List<Protocol> DEFAULT_PROTOCOLS = Util.immutableList(
+public class OkHttpClient implements Cloneable, Call.Factory, WebSocket.Factory {
+  static final List<Protocol> DEFAULT_PROTOCOLS = Util.immutableList(
       Protocol.HTTP_2, Protocol.HTTP_1_1);
 
-  private static final List<ConnectionSpec> DEFAULT_CONNECTION_SPECS = Util.immutableList(
+  static final List<ConnectionSpec> DEFAULT_CONNECTION_SPECS = Util.immutableList(
       ConnectionSpec.MODERN_TLS, ConnectionSpec.COMPATIBLE_TLS, ConnectionSpec.CLEARTEXT);
 
   static {
@@ -201,12 +201,13 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
   final int connectTimeout;
   final int readTimeout;
   final int writeTimeout;
+  final int pingInterval;
 
   public OkHttpClient() {
     this(new Builder());
   }
 
-  private OkHttpClient(Builder builder) {
+  OkHttpClient(Builder builder) {
     this.dispatcher = builder.dispatcher;
     this.proxy = builder.proxy;
     this.protocols = builder.protocols;
@@ -246,6 +247,7 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
     this.connectTimeout = builder.connectTimeout;
     this.readTimeout = builder.readTimeout;
     this.writeTimeout = builder.writeTimeout;
+    this.pingInterval = builder.pingInterval;
   }
 
   private X509TrustManager systemDefaultTrustManager() {
@@ -287,6 +289,11 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
   /** Default write timeout (in milliseconds). */
   public int writeTimeoutMillis() {
     return writeTimeout;
+  }
+
+  /** Web socket ping interval (in milliseconds). */
+  public int pingIntervalMillis() {
+    return pingInterval;
   }
 
   public Proxy proxy() {
@@ -393,8 +400,8 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
   /**
    * Uses {@code request} to connect a new web socket.
    */
-  @Override public NewWebSocket newWebSocket(Request request, NewWebSocket.Listener listener) {
-    RealNewWebSocket webSocket = new RealNewWebSocket(request, listener, new SecureRandom());
+  @Override public WebSocket newWebSocket(Request request, WebSocketListener listener) {
+    RealWebSocket webSocket = new RealWebSocket(request, listener, new SecureRandom());
     webSocket.connect(this);
     return webSocket;
   }
@@ -429,6 +436,7 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
     int connectTimeout;
     int readTimeout;
     int writeTimeout;
+    int pingInterval;
 
     public Builder() {
       dispatcher = new Dispatcher();
@@ -449,6 +457,7 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
       connectTimeout = 10_000;
       readTimeout = 10_000;
       writeTimeout = 10_000;
+      pingInterval = 0;
     }
 
     Builder(OkHttpClient okHttpClient) {
@@ -477,6 +486,7 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
       this.connectTimeout = okHttpClient.connectTimeout;
       this.readTimeout = okHttpClient.readTimeout;
       this.writeTimeout = okHttpClient.writeTimeout;
+      this.pingInterval = okHttpClient.pingInterval;
     }
 
     /**
@@ -485,12 +495,7 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
      * milliseconds.
      */
     public Builder connectTimeout(long timeout, TimeUnit unit) {
-      if (timeout < 0) throw new IllegalArgumentException("timeout < 0");
-      if (unit == null) throw new NullPointerException("unit == null");
-      long millis = unit.toMillis(timeout);
-      if (millis > Integer.MAX_VALUE) throw new IllegalArgumentException("Timeout too large.");
-      if (millis == 0 && timeout > 0) throw new IllegalArgumentException("Timeout too small.");
-      connectTimeout = (int) millis;
+      connectTimeout = checkDuration("timeout", timeout, unit);
       return this;
     }
 
@@ -499,12 +504,7 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
      * values must be between 1 and {@link Integer#MAX_VALUE} when converted to milliseconds.
      */
     public Builder readTimeout(long timeout, TimeUnit unit) {
-      if (timeout < 0) throw new IllegalArgumentException("timeout < 0");
-      if (unit == null) throw new NullPointerException("unit == null");
-      long millis = unit.toMillis(timeout);
-      if (millis > Integer.MAX_VALUE) throw new IllegalArgumentException("Timeout too large.");
-      if (millis == 0 && timeout > 0) throw new IllegalArgumentException("Timeout too small.");
-      readTimeout = (int) millis;
+      readTimeout = checkDuration("timeout", timeout, unit);
       return this;
     }
 
@@ -513,13 +513,30 @@ public class OkHttpClient implements Cloneable, Call.Factory, NewWebSocket.Facto
      * values must be between 1 and {@link Integer#MAX_VALUE} when converted to milliseconds.
      */
     public Builder writeTimeout(long timeout, TimeUnit unit) {
-      if (timeout < 0) throw new IllegalArgumentException("timeout < 0");
-      if (unit == null) throw new NullPointerException("unit == null");
-      long millis = unit.toMillis(timeout);
-      if (millis > Integer.MAX_VALUE) throw new IllegalArgumentException("Timeout too large.");
-      if (millis == 0 && timeout > 0) throw new IllegalArgumentException("Timeout too small.");
-      writeTimeout = (int) millis;
+      writeTimeout = checkDuration("timeout", timeout, unit);
       return this;
+    }
+
+    /**
+     * Sets the interval between web socket pings initiated by this client. Use this to
+     * automatically send web socket ping frames until either the web socket fails or it is closed.
+     * This keeps the connection alive and may detect connectivity failures early. No timeouts are
+     * enforced on the acknowledging pongs.
+     *
+     * <p>The default value of 0 disables client-initiated pings.
+     */
+    public Builder pingInterval(long interval, TimeUnit unit) {
+      pingInterval = checkDuration("interval", interval, unit);
+      return this;
+    }
+
+    private static int checkDuration(String name, long duration, TimeUnit unit) {
+      if (duration < 0) throw new IllegalArgumentException(name + " < 0");
+      if (unit == null) throw new NullPointerException("unit == null");
+      long millis = unit.toMillis(duration);
+      if (millis > Integer.MAX_VALUE) throw new IllegalArgumentException(name + " too large.");
+      if (millis == 0 && duration > 0) throw new IllegalArgumentException(name + " too small.");
+      return (int) millis;
     }
 
     /**

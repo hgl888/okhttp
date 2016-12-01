@@ -41,9 +41,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
@@ -69,7 +67,7 @@ import okhttp3.internal.http2.Http2Connection;
 import okhttp3.internal.http2.Http2Stream;
 import okhttp3.internal.http2.Settings;
 import okhttp3.internal.platform.Platform;
-import okhttp3.internal.ws.RealNewWebSocket;
+import okhttp3.internal.ws.RealWebSocket;
 import okhttp3.internal.ws.WebSocketProtocol;
 import okio.Buffer;
 import okio.BufferedSink;
@@ -82,7 +80,7 @@ import org.junit.rules.TestRule;
 import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
 
-import static java.util.concurrent.TimeUnit.SECONDS;
+import static okhttp3.internal.Util.closeQuietly;
 import static okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AFTER_REQUEST;
 import static okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_END;
 import static okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START;
@@ -347,13 +345,13 @@ public final class MockWebServer implements TestRule, Closeable {
         }
 
         // Release all sockets and all threads, even if any close fails.
-        Util.closeQuietly(serverSocket);
+        closeQuietly(serverSocket);
         for (Iterator<Socket> s = openClientSockets.iterator(); s.hasNext(); ) {
-          Util.closeQuietly(s.next());
+          closeQuietly(s.next());
           s.remove();
         }
         for (Iterator<Http2Connection> s = openConnections.iterator(); s.hasNext(); ) {
-          Util.closeQuietly(s.next());
+          closeQuietly(s.next());
           s.remove();
         }
         dispatcher.shutdown();
@@ -669,22 +667,17 @@ public final class MockWebServer implements TestRule, Closeable {
         .protocol(Protocol.HTTP_1_1)
         .build();
 
-    String name = request.getPath();
-    ThreadPoolExecutor replyExecutor =
-        new ThreadPoolExecutor(1, 1, 1, SECONDS, new LinkedBlockingDeque<Runnable>(),
-            Util.threadFactory(Util.format("MockWebServer %s WebSocket Replier", name), true));
-    replyExecutor.allowCoreThreadTimeOut(true);
-
     final CountDownLatch connectionClose = new CountDownLatch(1);
-    RealNewWebSocket.Streams streams = new RealNewWebSocket.Streams(false, source, sink) {
+    RealWebSocket.Streams streams = new RealWebSocket.Streams(false, source, sink) {
       @Override public void close() {
         connectionClose.countDown();
       }
     };
-    RealNewWebSocket webSocket = new RealNewWebSocket(fancyRequest,
+    RealWebSocket webSocket = new RealWebSocket(fancyRequest,
         response.getWebSocketListener(), new SecureRandom());
     response.getWebSocketListener().onOpen(webSocket, fancyResponse);
-    webSocket.initReaderAndWriter(streams);
+    String name = "MockWebServer WebSocket " + request.getPath();
+    webSocket.initReaderAndWriter(name, 0, streams);
     webSocket.loopReader();
 
     // Even if messages are no longer being read we need to wait for the connection close signal.
@@ -693,9 +686,8 @@ public final class MockWebServer implements TestRule, Closeable {
     } catch (InterruptedException ignored) {
     }
 
-    replyExecutor.shutdown();
-    Util.closeQuietly(sink);
-    Util.closeQuietly(source);
+    closeQuietly(sink);
+    closeQuietly(source);
   }
 
   private void writeHttpResponse(Socket socket, BufferedSink sink, MockResponse response)

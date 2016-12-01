@@ -32,7 +32,7 @@ import static org.junit.Assert.fail;
 
 public final class WebSocketReaderTest {
   private final Buffer data = new Buffer();
-  private final NewWebSocketRecorder callback = new NewWebSocketRecorder("client");
+  private final WebSocketRecorder callback = new WebSocketRecorder("client");
   private final Random random = new Random(0);
 
   // Mutually exclusive. Use the one corresponding to the peer whose behavior you wish to test.
@@ -214,7 +214,7 @@ public final class WebSocketReaderTest {
     byte[] bytes = binaryData(256);
     data.write(ByteString.decodeHex("827E0100")).write(bytes);
     clientReader.processNextFrame();
-    callback.assertBinaryMessage(bytes);
+    callback.assertBinaryMessage(ByteString.of(bytes));
   }
 
   @Test public void clientTwoFrameBinary() throws IOException {
@@ -222,7 +222,7 @@ public final class WebSocketReaderTest {
     data.write(ByteString.decodeHex("0264")).write(bytes, 0, 100);
     data.write(ByteString.decodeHex("8064")).write(bytes, 100, 100);
     clientReader.processNextFrame();
-    callback.assertBinaryMessage(bytes);
+    callback.assertBinaryMessage(ByteString.of(bytes));
   }
 
   @Test public void twoFrameNotContinuation() throws IOException {

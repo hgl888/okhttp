@@ -18,6 +18,7 @@ package okhttp3.internal.ws;
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.ProtocolException;
+import java.util.concurrent.TimeUnit;
 import okio.Buffer;
 import okio.BufferedSource;
 import okio.ByteString;
@@ -42,7 +43,6 @@ import static okhttp3.internal.ws.WebSocketProtocol.PAYLOAD_BYTE_MAX;
 import static okhttp3.internal.ws.WebSocketProtocol.PAYLOAD_LONG;
 import static okhttp3.internal.ws.WebSocketProtocol.PAYLOAD_SHORT;
 import static okhttp3.internal.ws.WebSocketProtocol.toggleMask;
-import static okhttp3.internal.ws.WebSocketProtocol.validateCloseCode;
 
 /**
  * An <a href="http://tools.ietf.org/html/rfc6455">RFC 6455</a>-compatible WebSocket frame reader.
@@ -105,7 +105,15 @@ final class WebSocketReader {
   private void readHeader() throws IOException {
     if (closed) throw new IOException("closed");
 
-    int b0 = source.readByte() & 0xff;
+    // Disable the timeout to read the first byte of a new frame.
+    int b0;
+    long timeoutBefore = source.timeout().timeoutNanos();
+    source.timeout().clearTimeout();
+    try {
+      b0 = source.readByte() & 0xff;
+    } finally {
+      source.timeout().timeout(timeoutBefore, TimeUnit.NANOSECONDS);
+    }
 
     opcode = b0 & B0_MASK_OPCODE;
     isFinalFrame = (b0 & B0_FLAG_FIN) != 0;
@@ -190,7 +198,8 @@ final class WebSocketReader {
         } else if (bufferSize != 0) {
           code = buffer.readShort();
           reason = buffer.readUtf8();
-          validateCloseCode(code, false);
+          String codeExceptionMessage = WebSocketProtocol.closeCodeExceptionMessage(code);
+          if (codeExceptionMessage != null) throw new ProtocolException(codeExceptionMessage);
         }
         frameCallback.onReadClose(code, reason);
         closed = true;

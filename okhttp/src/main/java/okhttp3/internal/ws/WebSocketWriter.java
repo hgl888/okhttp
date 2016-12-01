@@ -94,16 +94,16 @@ final class WebSocketWriter {
    * href="http://tools.ietf.org/html/rfc6455#section-7.4">Section 7.4 of RFC 6455</a> or {@code 0}.
    * @param reason Reason for shutting down or {@code null}.
    */
-  void writeClose(int code, String reason) throws IOException {
+  void writeClose(int code, ByteString reason) throws IOException {
     ByteString payload = ByteString.EMPTY;
     if (code != 0 || reason != null) {
       if (code != 0) {
-        validateCloseCode(code, true);
+        validateCloseCode(code);
       }
       Buffer buffer = new Buffer();
       buffer.writeShort(code);
       if (reason != null) {
-        buffer.writeUtf8(reason);
+        buffer.write(reason);
       }
       payload = buffer.readByteString();
     }
