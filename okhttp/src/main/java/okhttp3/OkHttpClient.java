@@ -18,6 +18,7 @@ package okhttp3;
 import java.net.MalformedURLException;
 import java.net.Proxy;
 import java.net.ProxySelector;
+import java.net.Socket;
 import java.net.UnknownHostException;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
@@ -148,12 +149,21 @@ public class OkHttpClient implements Cloneable, Call.Factory, WebSocket.Factory 
         return pool.get(address, streamAllocation);
       }
 
+      @Override public Socket deduplicate(
+          ConnectionPool pool, Address address, StreamAllocation streamAllocation) {
+        return pool.deduplicate(address, streamAllocation);
+      }
+
       @Override public void put(ConnectionPool pool, RealConnection connection) {
         pool.put(connection);
       }
 
       @Override public RouteDatabase routeDatabase(ConnectionPool connectionPool) {
         return connectionPool.routeDatabase;
+      }
+
+      @Override public int code(Response.Builder responseBuilder) {
+        return responseBuilder.code;
       }
 
       @Override

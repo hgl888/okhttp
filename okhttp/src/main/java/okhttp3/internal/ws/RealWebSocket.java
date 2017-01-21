@@ -190,7 +190,7 @@ public final class RealWebSocket implements WebSocket, WebSocketReader.FrameCall
         // Promote the HTTP streams into web socket streams.
         StreamAllocation streamAllocation = Internal.instance.streamAllocation(call);
         streamAllocation.noNewStreams(); // Prevent connection pooling!
-        Streams streams = new ClientStreams(streamAllocation);
+        Streams streams = streamAllocation.connection().newWebSocketStreams(streamAllocation);
 
         // Process all web socket messages.
         try {
@@ -495,12 +495,15 @@ public final class RealWebSocket implements WebSocket, WebSocketReader.FrameCall
   }
 
   private final class PingRunnable implements Runnable {
+    PingRunnable() {
+    }
+
     @Override public void run() {
       writePingFrame();
     }
   }
 
-  private void writePingFrame() {
+  void writePingFrame() {
     WebSocketWriter writer;
     synchronized (this) {
       if (failed) return;
@@ -563,19 +566,6 @@ public final class RealWebSocket implements WebSocket, WebSocketReader.FrameCall
       this.client = client;
       this.source = source;
       this.sink = sink;
-    }
-  }
-
-  static final class ClientStreams extends Streams {
-    private final StreamAllocation streamAllocation;
-
-    ClientStreams(StreamAllocation streamAllocation) {
-      super(true, streamAllocation.connection().source, streamAllocation.connection().sink);
-      this.streamAllocation = streamAllocation;
-    }
-
-    @Override public void close() {
-      streamAllocation.streamFinished(true, streamAllocation.codec());
     }
   }
 
