@@ -22,11 +22,11 @@ import java.net.Socket;
 import java.net.UnknownHostException;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
-import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import javax.net.SocketFactory;
@@ -406,7 +406,8 @@ public class OkHttpClient implements Cloneable, Call.Factory, WebSocket.Factory 
     return networkInterceptors;
   }
 
-  public EventListener.Factory eventListenerFactory() {
+  // TODO(jwilson): make this public after the 3.7 release.
+  /*public*/ EventListener.Factory eventListenerFactory() {
     return eventListenerFactory;
   }
 
@@ -421,7 +422,7 @@ public class OkHttpClient implements Cloneable, Call.Factory, WebSocket.Factory 
    * Uses {@code request} to connect a new web socket.
    */
   @Override public WebSocket newWebSocket(Request request, WebSocketListener listener) {
-    RealWebSocket webSocket = new RealWebSocket(request, listener, new SecureRandom());
+    RealWebSocket webSocket = new RealWebSocket(request, listener, new Random());
     webSocket.connect(this);
     return webSocket;
   }
@@ -887,13 +888,15 @@ public class OkHttpClient implements Cloneable, Call.Factory, WebSocket.Factory 
       return this;
     }
 
-    public Builder eventListener(EventListener eventListener) {
+    // TODO(jwilson): make this public after the 3.7 release.
+    /*public*/ Builder eventListener(EventListener eventListener) {
       if (eventListener == null) throw new NullPointerException("eventListener == null");
       this.eventListenerFactory = EventListener.factory(eventListener);
       return this;
     }
 
-    public Builder eventListenerFactory(EventListener.Factory eventListenerFactory) {
+    // TODO(jwilson): make this public after the 3.7 release.
+    /*public*/ Builder eventListenerFactory(EventListener.Factory eventListenerFactory) {
       if (eventListenerFactory == null) {
         throw new NullPointerException("eventListenerFactory == null");
       }
