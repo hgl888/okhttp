@@ -251,7 +251,8 @@ public final class Request {
     }
 
     public Request build() {
-      if (url == null) throw new IllegalStateException("url == null");
+      if (url == null)
+        throw new IllegalStateException("url == null");
       return new Request(this);
     }
   }
